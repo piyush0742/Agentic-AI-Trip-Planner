@@ -1,0 +1,24 @@
+# Generated data - should NOT be committed
+conversation.json
+chroma_db/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+venv/
+env/
+.venv/
+
+# Environment / secrets (in case any get added later)
+.env
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
