@@ -21,6 +21,10 @@ from langchain.agents import create_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+
+
 
 # ---------------------------------------------------------------------
 # CONFIG - fill in your own GCP project id
@@ -242,6 +246,17 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 app = FastAPI()
+
+@app.get("/")
+def serve_chat_page():
+    return FileResponse("trip_chat_client.html")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 all_conversations = {}
 class ChatRequest(BaseModel):

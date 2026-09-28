@@ -1,0 +1,7 @@
+# .dockerignore
+conversation.json
+test.py
+__pycache__/
+*.pyc
+.git/
+.env
