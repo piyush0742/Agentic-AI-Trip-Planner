@@ -18,7 +18,7 @@ import chromadb
 
 EMBED_URL = "http://localhost:11434/api/embeddings"
 EMBED_MODEL_NAME = "nomic-embed-text"
-PDF_PATH = "trip_guide.pdf"
+PDF_PATH = "trip_guide_expanded.pdf"
 SENTENCES_PER_CHUNK = 3  # group 3 full sentences per chunk - no more mid-sentence cuts
 CHROMA_DB_PATH = "./chroma_db"  # a folder Chroma will create, holds the saved vectors
 

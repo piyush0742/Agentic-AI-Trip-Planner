@@ -34,8 +34,12 @@ print(f"Collection count: {collection.count()}")
 print(f"Collection metadata: {collection.metadata}")
 print("-" * 60)
 
-test_queries = ["San Francisco", "Golden Gate Bridge", "places to explore in San Francisco"]
-
+test_queries = [
+    "San Francisco",
+    "Golden Gate Bridge",
+    "places to explore in San Francisco",
+    "The Golden Gate Bridge is San Francisco's most iconic landmark, best viewed from Battery Spencer across the bay or by walking or biking across it.",
+]
 for query in test_queries:
     print(f"\nQuery: '{query}'")
     query_embedding = get_embedding("search_query: " + query)
