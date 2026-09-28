@@ -1,0 +1,9 @@
+langchain
+langchain-google-genai
+langchain-ollama
+langchain-chroma
+pdfplumber
+requests
+fastapi
+uvicorn
+pydantic
