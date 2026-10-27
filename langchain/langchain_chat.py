@@ -15,16 +15,20 @@ import requests
 import time
 import json
 import os
+import sys
+import logging
 
 from langchain.tools import tool
 from langchain.agents import create_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 
-
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 # ---------------------------------------------------------------------
 # CONFIG - fill in your own GCP project id
@@ -39,6 +43,70 @@ CONVERSATION_FILE = "conversation.json"
 
 
 # ---------------------------------------------------------------------
+# OBSERVABILITY SETUP
+#
+# 1. LOGGING: Cloud Run automatically captures anything written to
+#    stdout/stderr and sends it to Cloud Logging. If what we write is
+#    valid JSON with a "severity" key, Cloud Logging parses it as a
+#    STRUCTURED log entry (filterable by severity, queryable by any
+#    field) instead of one long plain-text blob. That's the entire
+#    trick - no separate logging agent/service to run, just formatting.
+#
+# 2. METRICS: we are NOT calling the Cloud Monitoring API to push
+#    custom metrics here - that would mean a separate client and an
+#    extra network call on every request. Instead we log fields like
+#    "latency_seconds" and "status" as structured JSON, and Cloud
+#    Logging's "log-based metrics" feature (created in the GCP Console/
+#    gcloud, not in this code) turns those fields into real
+#    dashboards/alerts. This is the standard low-effort pattern.
+#
+# 3. TRACING: OpenTelemetry + the Cloud Trace exporter. Each incoming
+#    request gets a trace automatically (FastAPIInstrumentor), and we
+#    add child spans around the agent call and each tool call - so in
+#    Cloud Trace you can see exactly how long the LLM took vs. each
+#    tool, for any single request.
+# ---------------------------------------------------------------------
+class CloudLoggingJSONFormatter(logging.Formatter):
+    """One-line JSON per log record, with a 'severity' field - this is
+    specifically what Cloud Logging looks for to treat stdout as
+    structured (queryable) logs instead of plain text."""
+
+    def format(self, record):
+        entry = {
+            "severity": record.levelname,
+            "message": record.getMessage(),
+        }
+        for field in ("session_id", "latency_seconds", "tool", "status", "error"):
+            if hasattr(record, field):
+                entry[field] = getattr(record, field)
+        return json.dumps(entry)
+
+
+logger = logging.getLogger("trip_planner")
+logger.setLevel(logging.INFO)
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(CloudLoggingJSONFormatter())
+logger.addHandler(_handler)
+logger.propagate = False  # don't also emit via the root logger's plain format
+
+# Tracing - exports spans to Cloud Trace. We use SimpleSpanProcessor
+# (synchronous, exports each span immediately) instead of
+# BatchSpanProcessor (async, exports in batches on a background
+# thread) - Cloud Run freezes the container's CPU right after the
+# HTTP response is sent, so a background batch never gets a chance to
+# run and spans silently get lost. Synchronous export is slightly
+# slower per-request, but guarantees spans are sent before the
+# response returns. If Cloud Trace isn't reachable (e.g. running
+# locally with no GCP credentials), the exporter just fails silently
+# instead of crashing the app.
+trace.set_tracer_provider(TracerProvider())
+trace.get_tracer_provider().add_span_processor(
+    SimpleSpanProcessor(CloudTraceSpanExporter())
+)
+tracer = trace.get_tracer("trip_planner")
+
+
+# ---------------------------------------------------------------------
 # TOOL 1: Weather (real API, TTL cache - same as raw project)
 # ---------------------------------------------------------------------
 weather_cache = {}
@@ -47,34 +115,45 @@ weather_cache = {}
 @tool
 def get_weather(city: str) -> str:
     """Get the current weather for a given city."""
-    key = city.lower()
-    if key in weather_cache:
-        cached_result, fetched_at = weather_cache[key]
-        if time.time() - fetched_at < CACHE_DURATION_SECONDS:
-            return cached_result
+    with tracer.start_as_current_span("tool.get_weather") as span:
+        span.set_attribute("city", city)
+        start = time.time()
 
-    geo_response = requests.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": city, "count": 1},
-        timeout=15
-    )
-    geo_data = geo_response.json()
-    if "results" not in geo_data:
-        return f"Could not find location: {city}"
+        key = city.lower()
+        if key in weather_cache:
+            cached_result, fetched_at = weather_cache[key]
+            if time.time() - fetched_at < CACHE_DURATION_SECONDS:
+                logger.info("get_weather cache hit", extra={"tool": "get_weather", "status": "cache_hit"})
+                return cached_result
 
-    lat = geo_data["results"][0]["latitude"]
-    lon = geo_data["results"][0]["longitude"]
+        geo_response = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": city, "count": 1},
+            timeout=15
+        )
+        geo_data = geo_response.json()
+        if "results" not in geo_data:
+            logger.warning("get_weather: city not found", extra={"tool": "get_weather", "status": "not_found"})
+            return f"Could not find location: {city}"
 
-    weather_response = requests.get(
-        "https://api.open-meteo.com/v1/forecast",
-        params={"latitude": lat, "longitude": lon, "current_weather": True},
-        timeout=15
-    )
-    weather_data = weather_response.json()
-    temp = weather_data["current_weather"]["temperature"]
-    result = f"Current temperature in {city}: {temp}°C"
-    weather_cache[key] = (result, time.time())
-    return result
+        lat = geo_data["results"][0]["latitude"]
+        lon = geo_data["results"][0]["longitude"]
+
+        weather_response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={"latitude": lat, "longitude": lon, "current_weather": True},
+            timeout=15
+        )
+        weather_data = weather_response.json()
+        temp = weather_data["current_weather"]["temperature"]
+        result = f"Current temperature in {city}: {temp}°C"
+        weather_cache[key] = (result, time.time())
+
+        logger.info(
+            "get_weather completed",
+            extra={"tool": "get_weather", "status": "ok", "latency_seconds": round(time.time() - start, 3)}
+        )
+        return result
 
 
 # ---------------------------------------------------------------------
@@ -83,28 +162,47 @@ def get_weather(city: str) -> str:
 @tool
 def convert_currency(amount: float, from_currency: str, to_currency: str) -> str:
     """Convert an amount of money from one currency to another."""
-    amount = float(amount)
-    response = requests.get(
-        f"https://api.frankfurter.dev/v2/rate/{from_currency.lower()}/{to_currency.lower()}",
-        timeout=15
-    )
-    if response.status_code != 200:
-        return f"Could not convert {from_currency} to {to_currency} - currency may not be supported"
-    data = response.json()
-    rate = data["rate"]
-    converted = amount * rate
-    return f"{amount} {from_currency.upper()} = {converted:.2f} {to_currency.upper()}"
+    with tracer.start_as_current_span("tool.convert_currency") as span:
+        span.set_attribute("from_currency", from_currency)
+        span.set_attribute("to_currency", to_currency)
+        start = time.time()
+
+        amount = float(amount)
+        response = requests.get(
+            f"https://api.frankfurter.dev/v2/rate/{from_currency.lower()}/{to_currency.lower()}",
+            timeout=15
+        )
+        if response.status_code != 200:
+            logger.warning(
+                "convert_currency: unsupported currency pair",
+                extra={"tool": "convert_currency", "status": "unsupported"}
+            )
+            return f"Could not convert {from_currency} to {to_currency} - currency may not be supported"
+        data = response.json()
+        rate = data["rate"]
+        converted = amount * rate
+
+        logger.info(
+            "convert_currency completed",
+            extra={"tool": "convert_currency", "status": "ok", "latency_seconds": round(time.time() - start, 3)}
+        )
+        return f"{amount} {from_currency.upper()} = {converted:.2f} {to_currency.upper()}"
 
 
 # ---------------------------------------------------------------------
 # TOOL 3: RAG search over the PDF (Chroma vector store)
 # ---------------------------------------------------------------------
+class PrefixedOllamaEmbeddings(OllamaEmbeddings):
+    """Must match ingest.py exactly - same prefixing, or search breaks."""
+    def embed_documents(self, texts):
+        prefixed = ["search_document: " + t for t in texts]
+        return super().embed_documents(prefixed)
 
-embeddings = GoogleGenerativeAIEmbeddings(
-      model="gemini-embedding-001",
-      project="agentic-ai-510016",   # jo variable pehle se define hai
-      vertexai=True,
-  )
+    def embed_query(self, text):
+        return super().embed_query("search_query: " + text)
+
+
+embeddings = PrefixedOllamaEmbeddings(model="nomic-embed-text")
 vectorstore = Chroma(
     collection_name=COLLECTION_NAME,
     embedding_function=embeddings,
@@ -120,30 +218,51 @@ def search_things_to_explore(query: str) -> str:
     what the user is interested in (history, food, nature, museums,
     sports). Include the city name in your search query if the user
     mentioned one."""
-    # Get top 3 candidates instead of just 1 - a single embedding match
-    # isn't always reliable for short/vague queries (confirmed via
-    # diagnose.py testing). Giving the model multiple candidates lets
-    # it reason over them, instead of blindly trusting one result.
-    results = vectorstore.similarity_search_with_relevance_scores(query, k=3)
+    with tracer.start_as_current_span("tool.search_things_to_explore") as span:
+        span.set_attribute("query", query)
+        start = time.time()
 
-    RELEVANCE_THRESHOLD = 0.5
-    relevant_results = [
-        (doc, score) for doc, score in results if score >= RELEVANCE_THRESHOLD
-    ]
+        # Get top 3 candidates instead of just 1 - a single embedding match
+        # isn't always reliable for short/vague queries (confirmed via
+        # diagnose.py testing). Giving the model multiple candidates lets
+        # it reason over them, instead of blindly trusting one result.
+        results = vectorstore.similarity_search_with_relevance_scores(query, k=3)
 
-    if not relevant_results:
-        return (
-            "No sufficiently relevant information found in the knowledge "
-            "base for this query."
+        RELEVANCE_THRESHOLD = 0.5
+        relevant_results = [
+            (doc, score) for doc, score in results if score >= RELEVANCE_THRESHOLD
+        ]
+
+        if not relevant_results:
+            logger.info(
+                "search_things_to_explore: no relevant match",
+                extra={
+                    "tool": "search_things_to_explore",
+                    "status": "no_match",
+                    "latency_seconds": round(time.time() - start, 3),
+                }
+            )
+            return (
+                "No sufficiently relevant information found in the knowledge "
+                "base for this query."
+            )
+
+        # Combine the surviving candidates - clearly separated, so the model
+        # can tell them apart and pick/synthesize the actually relevant one(s).
+        combined = "\n\n".join(
+            f"[Match {i+1}, relevance={score:.2f}]: {doc.page_content}"
+            for i, (doc, score) in enumerate(relevant_results)
         )
 
-    # Combine the surviving candidates - clearly separated, so the model
-    # can tell them apart and pick/synthesize the actually relevant one(s).
-    combined = "\n\n".join(
-        f"[Match {i+1}, relevance={score:.2f}]: {doc.page_content}"
-        for i, (doc, score) in enumerate(relevant_results)
-    )
-    return combined
+        logger.info(
+            "search_things_to_explore completed",
+            extra={
+                "tool": "search_things_to_explore",
+                "status": "ok",
+                "latency_seconds": round(time.time() - start, 3),
+            }
+        )
+        return combined
 
 
 AVAILABLE_TOOLS = [get_weather, convert_currency, search_things_to_explore]
@@ -238,19 +357,21 @@ def save_conversation(turns):
 
 
 # ---------------------------------------------------------------------
-# FASTAPI - single-turn endpoint (no session/memory yet - that's the
-# next step). Every request is independent: one question in, one
-# answer out, no conversation history carried between requests.
+# FASTAPI - multi-user endpoint. Each request carries a session_id,
+# so multiple people can chat independently without their conversation
+# histories getting mixed up.
 # ---------------------------------------------------------------------
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 app = FastAPI()
 
-@app.get("/")
-def serve_chat_page():
-    return FileResponse("trip_chat_client.html")
-
+# Allows the browser-based HTML chat page to call this API from a
+# different origin (a local file, or any domain). allow_origins=["*"]
+# is fine for testing - in real production, restrict this to your
+# actual frontend's domain.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -258,7 +379,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Automatically creates a trace span for every incoming HTTP request -
+# gives you request-level traces in Cloud Trace with zero manual work,
+# on top of the custom spans we add inside /chat below.
+FastAPIInstrumentor.instrument_app(app)
+
+
+@app.get("/")
+def serve_chat_page():
+    return FileResponse("trip_chat_client.html")
+
+
+# Per-session conversation memory. NOTE: this lives in process memory -
+# it resets whenever the Cloud Run container restarts (see README
+# "Known limitations" - Firestore would fix this, not done yet).
 all_conversations = {}
+
+
+# ---------------------------------------------------------------------
+# RATE LIMITING - same pattern as weather_cache: a dictionary tracking
+# recent request timestamps PER SESSION. If a session has made
+# MAX_REQUESTS or more within the last WINDOW_SECONDS, reject the
+# request with HTTP 429 instead of calling the (costly) LLM.
+# ---------------------------------------------------------------------
+rate_limit_tracker = {}   # {"session_id": [timestamp1, timestamp2, ...]}
+MAX_REQUESTS = 10
+WINDOW_SECONDS = 60
+
+
+def check_rate_limit(session_id):
+    now = time.time()
+    timestamps = rate_limit_tracker.get(session_id, [])
+
+    # Drop any timestamps older than the window - they no longer count.
+    recent_timestamps = [t for t in timestamps if now - t < WINDOW_SECONDS]
+
+    if len(recent_timestamps) >= MAX_REQUESTS:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded - max {MAX_REQUESTS} requests per {WINDOW_SECONDS} seconds."
+        )
+
+    recent_timestamps.append(now)
+    rate_limit_tracker[session_id] = recent_timestamps
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
@@ -266,14 +431,54 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 def chat(request: ChatRequest):
-    conversation = all_conversations.get(request.session_id, [])
-    conversation.append({"role": "user", "content": request.message})
-    result = agent.invoke({"messages": conversation})    
-    final_message = result["messages"][-1]
-    answer_text = get_text_content(final_message.content)
-    conversation.append({"role": "assistant", "content": answer_text})
-    all_conversations[request.session_id] = conversation 
-    return {"answer": answer_text}
+    start = time.time()
+
+    with tracer.start_as_current_span("chat_request") as span:
+        span.set_attribute("session_id", request.session_id)
+
+        try:
+            check_rate_limit(request.session_id)   # raises HTTPException if over limit
+        except HTTPException:
+            logger.warning(
+                "rate limit exceeded",
+                extra={"session_id": request.session_id, "status": "rate_limited"}
+            )
+            raise
+
+        try:
+            conversation = all_conversations.get(request.session_id, [])
+            conversation.append({"role": "user", "content": request.message})
+
+            with tracer.start_as_current_span("agent_invoke"):
+                result = agent.invoke({"messages": conversation})
+
+            final_message = result["messages"][-1]
+            answer_text = get_text_content(final_message.content)
+
+            conversation.append({"role": "assistant", "content": answer_text})
+            all_conversations[request.session_id] = conversation
+
+            logger.info(
+                "chat request completed",
+                extra={
+                    "session_id": request.session_id,
+                    "status": "ok",
+                    "latency_seconds": round(time.time() - start, 3),
+                }
+            )
+            return {"answer": answer_text}
+
+        except Exception as e:
+            logger.error(
+                "chat request failed",
+                extra={
+                    "session_id": request.session_id,
+                    "status": "error",
+                    "error": str(e),
+                    "latency_seconds": round(time.time() - start, 3),
+                }
+            )
+            raise HTTPException(status_code=500, detail="Internal error processing chat request")
 
 
 # ---------------------------------------------------------------------

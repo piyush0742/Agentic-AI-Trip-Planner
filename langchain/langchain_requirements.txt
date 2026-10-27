@@ -7,3 +7,7 @@ requests
 fastapi
 uvicorn
 pydantic
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-gcp-trace
+opentelemetry-instrumentation-fastapi
