@@ -39,7 +39,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r langchain_requirements.txt
 
       # Cache key is derived from the PDF's own content hash - if the
       # PDF hasn't changed, this restores the previously-built Chroma
@@ -55,10 +55,10 @@ jobs:
 
       - name: Re-ingest PDF into Chroma (only runs if the PDF changed)
         if: steps.chroma_cache.outputs.cache-hit != 'true'
-        run: python3 ingest.py
+        run: python3 langchain_ingest.py
 
       - name: Run evals
-        run: python3 evals.py
+        run: python3 langchain_evals.py
 
       # Everything below only runs on a successful push to main - not
       # on pull requests. A PR only needs to prove the evals still
