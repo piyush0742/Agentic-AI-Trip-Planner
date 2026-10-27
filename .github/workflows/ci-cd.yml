@@ -1,0 +1,88 @@
+name: CI/CD - Trip Planner (LangChain)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Required for Workload Identity Federation - lets this workflow request
+# a short-lived GCP token instead of storing a long-lived service
+# account key as a GitHub secret.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: langchain
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Cache key is derived from the PDF's own content hash - if the
+      # PDF hasn't changed, this restores the previously-built Chroma
+      # store and the ingest step below is skipped entirely. If the
+      # PDF changed, this is a cache miss, ingest runs, and the result
+      # is cached under the new hash for next time.
+      - name: Cache Chroma vector store (keyed on PDF content)
+        id: chroma_cache
+        uses: actions/cache@v4
+        with:
+          path: langchain/chroma_db
+          key: chroma-db-${{ hashFiles('langchain/trip_guide_expanded.pdf') }}
+
+      - name: Re-ingest PDF into Chroma (only runs if the PDF changed)
+        if: steps.chroma_cache.outputs.cache-hit != 'true'
+        run: python3 ingest.py
+
+      - name: Run evals
+        run: python3 evals.py
+
+      # Everything below only runs on a successful push to main - not
+      # on pull requests. A PR only needs to prove the evals still
+      # pass; only a merge to main should actually ship a new image.
+      - name: Configure Docker for Artifact Registry
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+      - name: Build Docker image
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          docker build --platform linux/amd64 \
+            -t us-central1-docker.pkg.dev/agentic-ai-510016/trip-planner-repo/trip-planner:${{ github.sha }} \
+            .
+
+      - name: Push Docker image
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          docker push us-central1-docker.pkg.dev/agentic-ai-510016/trip-planner-repo/trip-planner:${{ github.sha }}
+
+      - name: Deploy to Cloud Run
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          gcloud run deploy trip-planner \
+            --image us-central1-docker.pkg.dev/agentic-ai-510016/trip-planner-repo/trip-planner:${{ github.sha }} \
+            --region us-central1 \
+            --allow-unauthenticated
