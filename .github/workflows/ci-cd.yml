@@ -59,10 +59,10 @@ jobs:
 
       - name: Re-ingest PDF into Chroma (only runs if the PDF changed)
         if: steps.chroma_cache.outputs.cache-hit != 'true'
-        run: python3 langchain/langchain_ingest.py
+        run: python3 langchain_ingest.py
 
       - name: Run evals
-        run: python3 langchain/langchain_evals.py
+        run: python3 langchain_evals.py
 
       # Everything below only runs on a successful push to main - not
       # on pull requests. A PR only needs to prove the evals still
