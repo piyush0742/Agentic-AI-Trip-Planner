@@ -18,9 +18,11 @@ Run with:
 """
 
 import pdfplumber
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_google_vertexai import VertexAIEmbeddings
 from langchain_chroma import Chroma
 
+GCP_PROJECT = "agentic-ai-510016"
+GCP_LOCATION = "us-central1"
 PDF_PATH = "trip_guide_expanded.pdf"
 SENTENCES_PER_CHUNK = 3
 CHROMA_DB_PATH = "./chroma_db"
@@ -62,14 +64,10 @@ sentences = split_into_sentences(pdf_text)
 chunks = group_sentences_into_chunks(sentences, SENTENCES_PER_CHUNK)
 print(f"Split into {len(sentences)} sentences, grouped into {len(chunks)} chunks.")
 
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001",
-    task_type="retrieval_document",  # Google's embedding model's own equivalent
-    # of the old "search_document:" prefix trick - it's a direct parameter
-    # here instead of a manual string prefix.
-    vertexai=True,
-    project="agentic-ai-510016",  # not the API-key-based Gemini Developer API -
-    location="us-central1"
+embeddings = VertexAIEmbeddings(
+    model_name="gemini-embedding-001",
+    project=GCP_PROJECT,
+    location=GCP_LOCATION,
 )
 
 print("Computing embeddings and storing in Chroma...")

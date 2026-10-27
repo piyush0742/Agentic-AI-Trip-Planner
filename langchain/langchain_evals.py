@@ -22,7 +22,8 @@ import time
 
 from langchain.tools import tool
 from langchain.agents import create_agent
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import VertexAIEmbeddings
 from langchain_chroma import Chroma
 
 GCP_PROJECT = "agentic-ai-510016"
@@ -84,9 +85,10 @@ def convert_currency(amount: float, from_currency: str, to_currency: str) -> str
 
 # Must match ingest.py's embedding model + task_type exactly, or the
 # query vectors and the stored document vectors won't align.
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001",
-    task_type="retrieval_query",
+embeddings = VertexAIEmbeddings(
+    model_name="gemini-embedding-001",
+    project=GCP_PROJECT,
+    location=GCP_LOCATION,
 )
 vectorstore = Chroma(
     collection_name=COLLECTION_NAME,
@@ -143,8 +145,8 @@ SYSTEM_PROMPT = (
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     vertexai=True,
-    project="agentic-ai-510016",  # not the API-key-based Gemini Developer API -
-    location="us-central1"
+    project=GCP_PROJECT,
+    location=GCP_LOCATION,
 )
 
 agent = create_agent(

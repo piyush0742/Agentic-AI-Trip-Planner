@@ -20,7 +20,8 @@ import logging
 
 from langchain.tools import tool
 from langchain.agents import create_agent
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import VertexAIEmbeddings
 from langchain_chroma import Chroma
 
 from opentelemetry import trace
@@ -197,12 +198,10 @@ def convert_currency(amount: float, from_currency: str, to_currency: str) -> str
 # trick nomic-embed-text needed. Also - unlike Ollama - this has no
 # dependency on a locally-running model process, so it works
 # identically on Cloud Run and in CI, not just on a dev machine.
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001",
-    task_type="retrieval_query",
-    vertexai=True,
-    project="agentic-ai-510016",  # not the API-key-based Gemini Developer API -
-    location="us-central1"
+embeddings = VertexAIEmbeddings(
+    model_name="gemini-embedding-001",
+    project=GCP_PROJECT,
+    location=GCP_LOCATION,
 )
 vectorstore = Chroma(
     collection_name=COLLECTION_NAME,

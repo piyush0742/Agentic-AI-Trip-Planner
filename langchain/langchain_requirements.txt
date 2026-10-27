@@ -1,5 +1,6 @@
 langchain
 langchain-google-genai
+langchain-google-vertexai
 langchain-ollama
 langchain-chroma
 pdfplumber
