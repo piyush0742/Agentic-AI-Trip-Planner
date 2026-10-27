@@ -1,4 +1,4 @@
-# Trip Planner Agent — Agentic AI Learning Project
+# Agentic AI - Trip Planner
 
 A hands-on, from-scratch agentic AI project built to learn the core mechanics of tool-calling agents, RAG, and agent guardrails — without relying on a framework (LangChain, LangGraph, etc.). Every layer (the agentic loop, tool contracts, RAG pipeline, evals) was built manually first, specifically to understand what frameworks abstract away before using one.
 
