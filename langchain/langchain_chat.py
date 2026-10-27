@@ -20,8 +20,7 @@ import logging
 
 from langchain.tools import tool
 from langchain.agents import create_agent
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import OllamaEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 
 from opentelemetry import trace
@@ -192,17 +191,16 @@ def convert_currency(amount: float, from_currency: str, to_currency: str) -> str
 # ---------------------------------------------------------------------
 # TOOL 3: RAG search over the PDF (Chroma vector store)
 # ---------------------------------------------------------------------
-class PrefixedOllamaEmbeddings(OllamaEmbeddings):
-    """Must match ingest.py exactly - same prefixing, or search breaks."""
-    def embed_documents(self, texts):
-        prefixed = ["search_document: " + t for t in texts]
-        return super().embed_documents(prefixed)
-
-    def embed_query(self, text):
-        return super().embed_query("search_query: " + text)
-
-
-embeddings = PrefixedOllamaEmbeddings(model="nomic-embed-text")
+# Must match ingest.py's embedding model + task_type exactly, or the
+# query vectors and the stored document vectors won't align - this is
+# Google's direct equivalent of the old manual "search_query:" prefix
+# trick nomic-embed-text needed. Also - unlike Ollama - this has no
+# dependency on a locally-running model process, so it works
+# identically on Cloud Run and in CI, not just on a dev machine.
+embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-001",
+    task_type="retrieval_query",
+)
 vectorstore = Chroma(
     collection_name=COLLECTION_NAME,
     embedding_function=embeddings,

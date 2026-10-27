@@ -3,19 +3,23 @@ INGESTION SCRIPT (LangChain version) — run ONCE, or whenever the PDF changes.
 
 Reads trip_guide_expanded.pdf (10 East/West coast cities), splits it into
 sentence-based chunks (same approach as the raw project - avoids cutting
-sentences mid-way), embeds each chunk using Ollama's nomic-embed-text
-(kept local/free even though chat now uses Vertex AI), and stores
-everything in a persistent Chroma vector database.
+sentences mid-way), embeds each chunk using Google's gemini-embedding-001,
+and stores everything in a persistent Chroma vector database.
+
+NOTE: embeddings used to run on Ollama's nomic-embed-text (local/free),
+but that meant Cloud Run and GitHub Actions - neither of which has
+Ollama installed - would silently fail whenever the RAG tool actually
+needed a fresh query embedding. Moved to Google's managed embeddings so
+the same code path works identically locally, on Cloud Run, and in CI.
 
 Run with:
     pip install -r requirements.txt
     python3 ingest.py
 """
 
-import langchain_chroma
 import pdfplumber
-from langchain_chroma import Chroma
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_chroma import Chroma
 
 PDF_PATH = "trip_guide_expanded.pdf"
 SENTENCES_PER_CHUNK = 3
@@ -52,9 +56,6 @@ def group_sentences_into_chunks(sentences, sentences_per_chunk):
     return chunks
 
 
-
-
-
 print("Reading PDF...")
 pdf_text = extract_text_from_pdf(PDF_PATH)
 sentences = split_into_sentences(pdf_text)
@@ -62,10 +63,11 @@ chunks = group_sentences_into_chunks(sentences, SENTENCES_PER_CHUNK)
 print(f"Split into {len(sentences)} sentences, grouped into {len(chunks)} chunks.")
 
 embeddings = GoogleGenerativeAIEmbeddings(
-      model="gemini-embedding-001",
-      project="agentic-ai-510016",   # jo variable pehle se define hai
-      vertexai=True,
-  )
+    model="models/gemini-embedding-001",
+    task_type="retrieval_document",  # Google's embedding model's own equivalent
+    # of the old "search_document:" prefix trick - it's a direct parameter
+    # here instead of a manual string prefix.
+)
 
 print("Computing embeddings and storing in Chroma...")
 vectorstore = Chroma.from_texts(
