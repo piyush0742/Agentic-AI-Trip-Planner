@@ -200,6 +200,9 @@ def convert_currency(amount: float, from_currency: str, to_currency: str) -> str
 embeddings = GoogleGenerativeAIEmbeddings(
     model="models/gemini-embedding-001",
     task_type="retrieval_query",
+    vertexai=True,
+    project="agentic-ai-510016",  # not the API-key-based Gemini Developer API -
+    location="us-central1"
 )
 vectorstore = Chroma(
     collection_name=COLLECTION_NAME,

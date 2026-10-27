@@ -143,8 +143,8 @@ SYSTEM_PROMPT = (
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     vertexai=True,
-    project=GCP_PROJECT,
-    location=GCP_LOCATION,
+    project="agentic-ai-510016",  # not the API-key-based Gemini Developer API -
+    location="us-central1"
 )
 
 agent = create_agent(

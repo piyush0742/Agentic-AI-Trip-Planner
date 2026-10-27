@@ -67,6 +67,9 @@ embeddings = GoogleGenerativeAIEmbeddings(
     task_type="retrieval_document",  # Google's embedding model's own equivalent
     # of the old "search_document:" prefix trick - it's a direct parameter
     # here instead of a manual string prefix.
+    vertexai=True,
+    project="agentic-ai-510016",  # not the API-key-based Gemini Developer API -
+    location="us-central1"
 )
 
 print("Computing embeddings and storing in Chroma...")
