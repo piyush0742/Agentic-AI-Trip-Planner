@@ -1,114 +1,99 @@
-# Trip Planner Agent — Agentic AI Learning Project
+# Trip Planner — Raw Version
 
-A hands-on, from-scratch agentic AI project built to learn the core mechanics of tool-calling agents, RAG, and agent guardrails — without relying on a framework (LangChain, LangGraph, etc.). Every layer (the agentic loop, tool contracts, RAG pipeline, evals) was built manually first, specifically to understand what frameworks abstract away before using one.
+A travel-assistant agent built **from scratch, with no agent framework** —
+plain Python, manual tool-calling loop, and a locally-run LLM via Ollama.
 
-The assistant answers questions about **Boston, New York, and San Francisco** using three tools:
-- **Live weather** (Open-Meteo API)
-- **Live currency conversion** (Frankfurter API, 200+ currencies)
-- **Places to explore** (RAG over a PDF trip guide, using a local vector database)
+## Why this version exists
 
-Runs entirely on a local machine using **Ollama** (`llama3` + `nomic-embed-text`) — no API keys, no cloud cost.
+Before reaching for LangChain, this branch was built to understand what an
+agent framework actually abstracts away: tool-calling, memory, retrieval,
+and the orchestration loop between them. Every piece here — the tool
+dispatch, the RAG pipeline, the conversation memory — is hand-written, so
+the trade-offs of using a framework (see the `main` branch) are grounded in
+first-hand experience rather than assumption.
 
----
+## What it does
 
-## Why build this without a framework?
+A terminal-based assistant that can:
+- Check current weather for a city (Open-Meteo API, with TTL-based caching)
+- Convert an amount between currencies (Frankfurter API)
+- Answer questions about things to explore in a city, grounded in a local
+  PDF knowledge base (RAG over a city-guide PDF, via Chroma)
 
-The goal was to understand the actual mechanics before trusting a framework's abstractions:
-- How a model *requests* a tool call vs. how code *executes* it
-- Why a `while` loop — not a fixed number of steps — is what makes an agent "agentic"
-- How RAG retrieval can silently fail even when the code runs without errors
-- What guardrails actually look like in code, not just in theory
+The agent decides which tool to call (or none) based on the user's message,
+calls it, and reasons over the result before responding — a manual
+implementation of the "single-agent, multiple tools" pattern.
 
----
+## Stack
 
-## Project Journey (Day 1 → Day 9)
+- **LLM**: Ollama, running `llama3.1` locally
+- **Embeddings**: Ollama, `nomic-embed-text`
+- **Vector store**: Chroma (persistent, local)
+- **Memory**: a JSON file on disk, loaded/saved per session
+- **No LangChain, no framework** — the agent loop, tool schemas, and
+  message history are all managed directly in Python
 
-| Day | What was built | Key concept |
-|---|---|---|
-| **Day 1** | Single-tool agent, manual round-trip (no loop) | The model only *requests* tool calls — it never executes them. Code does. |
-| **Day 2** | Two tools (weather + currency), manual round-trips | Handling multiple tool calls in one turn; a real bug where the model sent a number as a string (`"500"` vs `500.0`) |
-| **Day 3** | Real `while` loop — the actual agentic loop | Fixed-round logic breaks on dependent, sequential questions (e.g. "check weather, THEN decide currency"); a proper loop lets the model reason incrementally |
-| **Day 4** | Swapped fake data for real APIs (Open-Meteo, Frankfurter) | Tool *contracts* — the model never knows or cares whether data comes from a dictionary or a live API |
-| **Day 5** | Interactive multi-turn chat (`input()` loop) | Nested while-loops: an outer loop for the conversation, an inner loop for one turn's tool-calling |
-| **Day 6** | Guardrails: grounding fixes, TTL-based caching, history trimming | LLMs will confidently hallucinate (fake APIs, fake budget numbers) unless explicitly told to stay grounded in tool results |
-| **Day 7** | RAG from a real PDF (`pdfplumber`) | Chunking, embeddings, cosine similarity — and the real debugging lesson: **3 separate silent bugs** stacked on top of each other (see below) |
-| **Day 8** | Automated evals (`step12_evals.py`) | Replaces manual conversation testing with a fixed test suite; introduced CI/CD-style exit codes (`sys.exit(1)` on failure) |
-| **Day 9** | Real vector database (Chroma) + persistent memory (JSON) | Separated **ingestion** (build the knowledge base once) from **serving** (query it on every chat) — and fixed the RAG bugs found in Day 7 |
-
----
-
-## Architecture
+## Project layout
 
 ```
-User input
-   │
-   ▼
-Agentic loop (while True)
-   │
-   ├── Model decides: answer directly, OR request a tool
-   │
-   ├── get_weather(city)              → Open-Meteo API (live)
-   ├── convert_currency(amt, from, to) → Frankfurter API (live)
-   └── search_things_to_explore(query) → Chroma vector DB (RAG over trip_guide.pdf)
-   │
-   ▼
-Tool result fed back to model → loop continues until model has a final answer
+trip-planner/
+├── chat.py              # main entry point — the agent loop
+├── ingest.py            # one-time/PDF-change script: chunk + embed + store
+├── chunk-diagnose.py    # diagnostic tool used while debugging retrieval
+├── evals.py             # automated test cases, non-zero exit on failure
+├── trip_guide.pdf        # the knowledge base the RAG tool searches
+├── conversation.json    # persisted chat history (generated, gitignored)
+└── journey/             # Day-1 … Day-7 — incremental build log
 ```
 
-**Ingestion (separate, one-time step — `ingest.py`):**
-```
-trip_guide.pdf → extract text → split into sentence-based chunks
-   → embed each chunk (nomic-embed-text) → store in Chroma (persisted to disk)
-```
+## Real bugs and fixes
 
----
+Retrieval looked "fine" early on but was quietly wrong. Diagnosing it
+surfaced four distinct problems:
 
-## Setup
+1. **Embedding prefix mismatch** — `nomic-embed-text` expects
+   `search_document:` / `search_query:` prefixes to align document and
+   query embeddings correctly. LangChain-style wrappers don't add these
+   automatically; a custom `PrefixedOllamaEmbeddings` class was written to
+   apply them consistently at ingest and query time.
+2. **Wrong distance metric** — Chroma's default didn't match what
+   `nomic-embed-text` was trained for; corrected to cosine similarity.
+3. **Mid-sentence chunking** — naive fixed-length splitting cut sentences
+   mid-way, degrading both embedding quality and retrieved context.
+   Fixed by chunking on sentence boundaries.
+4. **Weak differentiation at small scale** — with only ~16 chunks across
+   10 cities, pure top-1 similarity search sometimes returned the wrong
+   city's chunk. Fixed with top-3 retrieval, a 0.5 relevance threshold,
+   and multi-candidate labeling so the model can disambiguate.
+
+**A verified finding, not just a claim**: with retrieval deliberately
+degraded under identical grounding instructions, `llama3` confidently
+hallucinated an answer, while Gemini (tested later, in the `main` branch)
+correctly said it didn't have the information. Same prompt, same broken
+context, different failure mode.
+
+## Running it
 
 ```bash
-# 1. Install Ollama and pull the required models
-ollama pull llama3
-ollama pull nomic-embed-text
-
-# 2. Install Python dependencies
-pip install requests pdfplumber chromadb
-
-# 3. Build the knowledge base (ONLY needs to run once, or when trip_guide.pdf changes)
-python3 ingest.py
-
-# 4. Chat
-python3 step15_chroma_and_memory.py
-
-# 5. (Optional) Run automated evals instead of manual testing
-python3 step12_evals.py
+# Requires Ollama running locally with llama3.1 and nomic-embed-text pulled
+pip install -r requirements.txt
+python3 ingest.py      # builds the Chroma store from the PDF
+python3 chat.py        # starts the interactive terminal chat
 ```
 
----
+Run the evals:
+```bash
+python3 evals.py       # exits non-zero if any test case fails
+```
 
-## Known Limitations (honest, not overstated)
+## Known limitations 
 
-This is a learning project, not a production system. Specifically:
+- **Local only** — no deployment, no HTTP interface, no multi-user support
+- **Single-session memory** — one JSON file, not per-user
+- **No observability** — no structured logging, no tracing
+- **Requires Ollama running locally** — not portable to a server without it
 
-- **Single local user only.** Conversation memory is a single JSON file — there's no concept of multiple users or sessions.
-- **`llama3` (not `llama3.1`) has weaker tool-calling reliability** than larger hosted models (Claude, GPT-4). It occasionally narrates its own reasoning in the final answer instead of answering directly, and earlier in development it "hedged" by calling multiple tools speculatively instead of reasoning step-by-step — a system prompt fix reduced but didn't fully eliminate this.
-- **No authentication, rate limiting, or input sanitization.** If this were exposed on a real website, it would need protection against prompt injection and abuse before going live.
-- **RAG quality depends on 3 non-obvious fixes** that are easy to silently get wrong (documented below) — even now, retrieval quality is "good enough for a 3-city demo," not rigorously benchmarked.
-- **No deployment yet.** Currently runs locally only. AWS Bedrock deployment is a planned next step, not yet implemented.
-- **Currency/weather data has no offline fallback.** If Open-Meteo or Frankfurter APIs are down, the tool returns an error rather than degrading gracefully.
-
-## Real bugs found during development (documented on purpose)
-
-Three separate, *silent* RAG bugs were found and fixed — none of them threw an error, all of them just returned wrong data:
-
-1. **Missing embedding prefix** — `nomic-embed-text` is an asymmetric embedding model; it requires `"search_document: "` / `"search_query: "` prefixes to align embeddings correctly. Without them, retrieval was consistently wrong.
-2. **Wrong distance metric** — Chroma defaults to L2 (Euclidean) distance, not cosine similarity. Since `nomic-embed-text` embeddings aren't normalized, this gave incorrect rankings even after fixing #1.
-3. **Chunking cut sentences mid-way** — fixed-word-count chunking (40 words/chunk) frequently split sentences in half, weakening each chunk's topical signal. Switched to sentence-based chunking (group whole sentences, not words).
-
-This is left in the README deliberately — the debugging process (isolating each bug with a standalone diagnostic script, rather than guessing) is arguably the most useful part of this project to talk about.
-
-## Next steps
-
-- Human-in-the-loop / approval flow for a risky tool (e.g. a mock `book_hotel`)
-- Deploy to AWS Bedrock (replacing local Ollama with a hosted model)
-- Basic prompt-injection testing
-- CI/CD pipeline running `step12_evals.py` before deploy
+These aren't oversights — this branch is deliberately scoped to the
+"understand the primitives" stage. The production-hardened, deployed
+version — LangChain, Gemini, Cloud Run, CI/CD, observability — lives on
+the `main` branch.
