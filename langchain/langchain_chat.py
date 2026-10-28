@@ -368,15 +368,16 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
-# Allows the browser-based HTML chat page to call this API from a
-# different origin (a local file, or any domain). allow_origins=["*"]
-# is fine for testing - in real production, restrict this to your
-# actual frontend's domain.
+# The chat UI is served same-origin (FileResponse from this same app,
+# see the "/" route below), so the browser doesn't even need CORS to
+# call /chat - this only matters if some other site's frontend calls
+# this API directly. Restricted to the service's own Cloud Run URL
+# instead of allow_origins=["*"], which accepted requests from any site.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["https://trip-planner-599550004216.us-central1.run.app"],
+    allow_methods=["POST"],
+    allow_headers=["Content-Type"],
 )
 
 # Automatically creates a trace span for every incoming HTTP request -
@@ -386,7 +387,7 @@ FastAPIInstrumentor.instrument_app(app)
 
 
 @app.get("/")
-def serve_chat_page():
+async def serve_chat_page():
     return FileResponse("trip_chat_client.html")
 
 
@@ -430,7 +431,7 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/chat")
-def chat(request: ChatRequest):
+async def chat(request: ChatRequest):
     start = time.time()
 
     with tracer.start_as_current_span("chat_request") as span:
@@ -450,7 +451,7 @@ def chat(request: ChatRequest):
             conversation.append({"role": "user", "content": request.message})
 
             with tracer.start_as_current_span("agent_invoke"):
-                result = agent.invoke({"messages": conversation})
+                result = await agent.ainvoke({"messages": conversation})
 
             final_message = result["messages"][-1]
             answer_text = get_text_content(final_message.content)
