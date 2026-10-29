@@ -99,8 +99,14 @@ vectorstore = Chroma(
 
 @tool
 def search_things_to_explore(query: str) -> str:
-    """Search for places to explore/visit in major East Coast and West
-    Coast US cities based on what the user is interested in."""
+    """Search a knowledge base covering countries across Europe, North
+    America, South America, Asia, and Australia/Oceania. Each country
+    entry covers food, places to explore, culture, sports, local
+    currency, best time to visit, and basic language phrases. Include
+    the country name (and topic, if clear from the question) in your
+    search query. If the result doesn't contain relevant matches, the
+    country may not be in the knowledge base - do not assume it is or
+    isn't covered without checking via this tool first."""
     # Same top-3 + relevance-threshold approach as production chat.py -
     # evals should exercise the actual retrieval logic, not a simplified
     # version of it.
@@ -125,19 +131,26 @@ def search_things_to_explore(query: str) -> str:
 
 
 SYSTEM_PROMPT = (
-    "You are a trip planning assistant for major East Coast and West "
-    "Coast US cities. You can check current weather, convert currency, "
-    "and search for places to explore in these cities. You must call "
-    "only ONE tool at a time. After receiving a tool's result, think "
-    "about what to do next based on that result before calling another "
-    "tool. Never call multiple tools speculatively just in case they "
-    "might be needed. When you use search_things_to_explore, ONLY use "
-    "information from the tool's result - do NOT use your own general "
-    "knowledge to fill the gap. You have NO budget, cost, or pricing "
-    "data available - if asked about trip costs or budgets, say this "
-    "information isn't available rather than estimating numbers. If a "
-    "question cannot be answered with your available tools, do NOT "
-    "call any tool at all - just say you don't have that capability."
+    "You are a travel assistant covering countries across Europe, North "
+    "America, South America, Asia, and Australia/Oceania. For each "
+    "covered country, you can answer questions about food, places to "
+    "explore, culture, sports, local currency, the best time to visit, "
+    "and basic language phrases - via the search_things_to_explore tool. "
+    "You can also check current live weather for any city worldwide, "
+    "and convert between any two currencies, using their respective "
+    "tools - these are not limited to the countries in your knowledge "
+    "base. You must call only ONE tool at a time. After receiving a "
+    "tool's result, think about what to do next based on that result "
+    "before calling another tool. Never call multiple tools "
+    "speculatively just in case they might be needed. When you use "
+    "search_things_to_explore, ONLY use information from the tool's "
+    "result - do NOT use your own general knowledge to fill the gap, "
+    "and do NOT guess which countries you cover. You have NO budget, "
+    "cost, or pricing data available - if asked about trip costs or "
+    "budgets, say this information isn't available rather than "
+    "estimating numbers. If a question cannot be answered with your "
+    "available tools, do NOT call any tool at all - just say you don't "
+    "have that capability."
 )
 
 # Must match chat.py's LLM setup exactly - same model, same vertexai
@@ -197,7 +210,7 @@ test_cases = [
         "expected_tool": "convert_currency",
     },
     {
-        "question": "What are some historic places to explore in Philadelphia?",
+        "question": "What are some popular places to explore in Japan?",
         "expected_tool": "search_things_to_explore",
     },
     {

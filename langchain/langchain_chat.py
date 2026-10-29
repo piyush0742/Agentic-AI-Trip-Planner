@@ -212,12 +212,15 @@ vectorstore = Chroma(
 
 @tool
 def search_things_to_explore(query: str) -> str:
-    """Search for places to explore/visit in major East Coast and West
-    Coast US cities (Boston, New York, Philadelphia, Washington DC, Miami,
-    Los Angeles, San Francisco, Seattle, Portland, San Diego) based on
-    what the user is interested in (history, food, nature, museums,
-    sports). Include the city name in your search query if the user
-    mentioned one."""
+    """Search a knowledge base covering countries across Europe, North
+    America, South America, Asia, and Australia/Oceania. Each country
+    entry covers food, places to explore, culture, sports, local
+    currency, best time to visit, and basic language phrases. Include
+    the country name (and topic, if clear from the question - e.g.
+    food, culture, sports, currency, best time to visit, language) in
+    your search query. If the result doesn't contain relevant matches,
+    the country may not be in the knowledge base - do not assume it is
+    or isn't covered without checking via this tool first."""
     with tracer.start_as_current_span("tool.search_things_to_explore") as span:
         span.set_attribute("query", query)
         start = time.time()
@@ -272,33 +275,38 @@ AVAILABLE_TOOLS = [get_weather, convert_currency, search_things_to_explore]
 # SYSTEM PROMPT - same guardrails as the raw project
 # ---------------------------------------------------------------------
 SYSTEM_PROMPT = (
-    "You are a trip planning assistant for major East Coast and West "
-    "Coast US cities: Boston, New York, Philadelphia, Washington DC, "
-    "Miami, Los Angeles, San Francisco, Seattle, Portland, and San Diego. "
-    "You can check current weather, convert currency, and search for "
-    "places to explore in these cities. You must call only ONE tool at "
-    "a time. After receiving a tool's result, think about what to do "
-    "next based on that result before calling another tool. Never call "
-    "multiple tools speculatively just in case they might be needed. "
-    "If information has ALREADY been given earlier in this conversation, "
-    "reuse it instead of calling the tool again. When you use "
+    "You are a travel assistant covering countries across Europe, North "
+    "America, South America, Asia, and Australia/Oceania. For each "
+    "covered country, you can answer questions about food, places to "
+    "explore, culture, sports, local currency, the best time to visit, "
+    "and basic language phrases - via the search_things_to_explore tool. "
+    "You can also check current live weather for any city worldwide, "
+    "and convert between any two currencies, using their respective "
+    "tools - these are not limited to the countries in your knowledge "
+    "base. You must call only ONE tool at a time. After receiving a "
+    "tool's result, think about what to do next based on that result "
+    "before calling another tool. Never call multiple tools "
+    "speculatively just in case they might be needed. If information "
+    "has ALREADY been given earlier in this conversation, reuse it "
+    "instead of calling the tool again. When you use "
     "search_things_to_explore, the result may contain MULTIPLE candidate "
     "matches labeled [Match 1], [Match 2], etc. with a relevance score - "
     "pick the one(s) that genuinely answer the question, and ignore "
-    "matches from the wrong city if the question specified one. ONLY use "
-    "information from the tool's result. If none of the matches seem "
-    "relevant to the question, say you don't have specific information "
-    "on that topic - do NOT use your own general knowledge to fill the "
-    "gap. You have NO budget, "
-    "cost, or pricing data available - if asked about trip costs or "
-    "budgets, say this information isn't available rather than "
-    "estimating numbers. If a question cannot be answered with your "
-    "available tools, do NOT call any tool at all - just say you don't "
-    "have that capability, instead of calling an unrelated tool. If "
-    "asked about earlier parts of THIS conversation, answer directly "
-    "from history you already have - do NOT call search_things_to_explore "
-    "for that. Answer directly without narrating which tool you called "
-    "or why."
+    "matches from the wrong country or topic if the question specified "
+    "one. ONLY use information from the tool's result. If none of the "
+    "matches seem relevant to the question - for example, if the "
+    "question is about a country not in your knowledge base - say you "
+    "don't have specific information on that topic, do NOT use your own "
+    "general knowledge to fill the gap, and do NOT guess which "
+    "countries you cover. You have NO budget, cost, or pricing data "
+    "available - if asked about trip costs or budgets, say this "
+    "information isn't available rather than estimating numbers. If a "
+    "question cannot be answered with your available tools, do NOT call "
+    "any tool at all - just say you don't have that capability, instead "
+    "of calling an unrelated tool. If asked about earlier parts of THIS "
+    "conversation, answer directly from history you already have - do "
+    "NOT call search_things_to_explore for that. Answer directly "
+    "without narrating which tool you called or why."
 )
 
 
